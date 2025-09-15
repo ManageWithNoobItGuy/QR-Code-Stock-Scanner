@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <base target="_top">
+    <title>QR Code Scanner</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            background-color: #f0f2f5;
+        }
+        h1 {
+            color: #333;
+        }
+        .container {
+            width: 100%;
+            max-width: 600px;
+            text-align: center;
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        #video-container {
+            display: none;
+            position: relative;
+            width: 100%;
+            max-width: 400px;
+            height: auto;
+            margin-top: 20px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        #video-container.active {
+            display: block;
+        }
+        #video {
+            width: 100%;
+            height: auto;
+        }
+        #qr-canvas {
+            display: none;
+        }
+        .btn {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-top: 10px;
+            transition: background-color 0.3s ease;
+        }
+        .btn:hover {
+            background-color: #0056b3;
+        }
+        #result-container {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #e9ecef;
+            border-radius: 8px;
+            text-align: left;
+            word-wrap: break-word;
+        }
+        .success {
+            color: green;
+        }
+        .error {
+            color: red;
+        }
+        .info {
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>QR Code Scanner</h1>
+        <button id="start-scan-btn" class="btn">เปิดกล้องเพื่อสแกน</button>
+        <div id="video-container">
+            <video id="video"></video>
+        </div>
+        <canvas id="qr-canvas"></canvas>
+        <div id="result-container">
+            <p id="result-text" class="info">ผลลัพธ์จะแสดงที่นี่...</p>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <script>
+        const video = document.getElementById('video');
+        const videoContainer = document.getElementById('video-container');
+        const qrCanvas = document.getElementById('qr-canvas');
+        const qrCanvasCtx = qrCanvas.getContext('2d');
+        const startScanBtn = document.getElementById('start-scan-btn');
+        const resultText = document.getElementById('result-text');
+
+        let isScanning = false;
+        let animationFrameId = null;
+
+        // Function to start the camera and scanning process
+        function startCamera() {
+            // Reset state
+            resultText.innerText = 'กำลังสแกน...';
+            resultText.className = 'info';
+            videoContainer.classList.add('active');
+            isScanning = true;
+
+            navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+                .then(stream => {
+                    video.srcObject = stream;
+                    video.setAttribute("playsinline", true);
+                    video.play();
+                    requestAnimationFrame(tick);
+                })
+                .catch(err => {
+                    console.error("Error accessing camera:", err);
+                    resultText.innerText = 'ไม่สามารถเข้าถึงกล้องได้: ' + err.message;
+                    resultText.className = 'error';
+                    videoContainer.classList.remove('active');
+                    startScanBtn.innerText = 'เปิดกล้องเพื่อสแกน';
+                });
+        }
+
+        // Function to stop the camera
+        function stopCamera() {
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+            }
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+                animationFrameId = null;
+            }
+            videoContainer.classList.remove('active');
+            isScanning = false;
+        }
+
+        // Animation loop for scanning
+        function tick() {
+            if (!isScanning) return;
+
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                qrCanvas.height = video.videoHeight;
+                qrCanvas.width = video.videoWidth;
+                qrCanvasCtx.drawImage(video, 0, 0, qrCanvas.width, qrCanvas.height);
+                const imageData = qrCanvasCtx.getImageData(0, 0, qrCanvas.width, qrCanvas.height);
+                const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                    inversionAttempts: "dontInvert",
+                });
+
+                if (code) {
+                    console.log("QR Code found:", code.data);
+                    // Stop camera immediately after finding a QR code
+                    stopCamera();
+                    startScanBtn.innerText = 'เปิดกล้องเพื่อสแกน';
+                    resultText.innerText = 'QR Code ที่สแกนได้: ' + code.data;
+                    resultText.className = 'info';
+
+                    // Call server-side function to process the data
+                    google.script.run
+                        .withSuccessHandler(showResult)
+                        .withFailureHandler(showError)
+                        .processQRCode(code.data);
+
+                } else {
+                    animationFrameId = requestAnimationFrame(tick);
+                }
+            } else {
+                animationFrameId = requestAnimationFrame(tick);
+            }
+        }
+
+        // Event listener for the button
+        startScanBtn.addEventListener('click', () => {
+            if (!isScanning) {
+                startCamera();
+                startScanBtn.innerText = 'กำลังสแกน...';
+            }
+        });
+
+        // Function to handle successful server response
+        function showResult(response) {
+            console.log("Server response:", response);
+            resultText.innerText = response.message;
+            if (response.status === 'success') {
+                resultText.className = 'success';
+            } else {
+                resultText.className = 'error';
+            }
+        }
+
+        // Function to handle server errors
+        function showError(error) {
+            console.error("Server error:", error);
+            resultText.innerText = 'เกิดข้อผิดพลาดในการบันทึกข้อมูล: ' + error.message;
+            resultText.className = 'error';
+        }
+    </script>
+</body>
+</html>
